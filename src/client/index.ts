@@ -1,27 +1,26 @@
 /**
- * agent-router-ua — 请求头注入插件（client half）。
+ * dsh-header-injection — 请求头注入插件（client half）。
  *
  * 在 DSH 设置页「插件配置」区注册一张可折叠卡片，编辑请求头注入配置：
  * 启用开关 + 多条 host 规则（每条 = 逗号分隔 host 后缀列表 + 一组多行
  * 「头名: 值」请求头，注入时同名覆盖原值），可增删。配置经 DSH 设置服务
- * （ctx.settingsScope）读写命名空间 `agent-router-ua`，保存后 node half
- * 通过 settings watch 实时生效，无需重启。
+ * （ctx.settingsScope）读写命名空间 `dsh-header-injection`，保存后
+ * node half 通过 settings watch 实时生效，无需重启。
  *
- * 2026-08-31 改版：插件由「UA 注入」升级为通用「请求头注入」；表单从
- * hosts/ua 升级为 rules 数组（hosts + headers）；v0.1.0 旧格式 {hosts, ua}
- * 与 v0.2.0 中间格式 rules[{hosts, ua}] 快照自动迁移为 User-Agent 头规则。
+ * 规则除 headers 多行头文本外，也支持 ua 简写字段（等价一条
+ * User-Agent 头），读取快照时自动展开。
  */
 
 import React, { useEffect, useRef, useState } from 'react'
 
 /** 插件名：合同要求与包名一致。 */
-export const name = 'agent-router-ua'
+export const name = 'dsh-header-injection'
 
 /** 严格注入：本插件 client 通过 ctx 访问的服务（settingsScope 动态注入）。 */
 export const inject = ['slots']
 
 /** 设置命名空间：与 node half 注册的 join key 一致。 */
-const NS = 'agent-router-ua'
+const NS = 'dsh-header-injection'
 
 /** 默认值（与 node half 保持一致）。 */
 const DEFAULT_HOSTS = 'agentrouter.org'
@@ -186,7 +185,7 @@ const errorStyle = {
 /** 表单中的一条规则（编辑态字符串，保存时规整）。 */
 type RuleForm = { hosts: string; headers: string }
 
-/** 从快照值规整出表单初始字段（rules 数组优先，旧格式 hosts/ua 自动迁移）。 */
+/** 从快照值规整出表单初始字段（rules 数组优先；规则内 headers 优先于 ua 简写）。 */
 function snapshotToForm(value: unknown): { enabled: boolean; rules: RuleForm[] } {
   const v = (value ?? {}) as Record<string, unknown>
   const rules: RuleForm[] = []
@@ -194,13 +193,13 @@ function snapshotToForm(value: unknown): { enabled: boolean; rules: RuleForm[] }
     for (const item of v.rules as Array<Record<string, unknown>>) {
       if (item == null) continue
       const hosts = typeof item.hosts === 'string' ? item.hosts : ''
-      // headers 多行头文本优先；仅有 ua 字段时（v0.2.0 中间格式）迁移为 User-Agent 头。
+      // headers 多行头文本优先；仅有 ua 字段时（简写形态）展开为 User-Agent 头。
       let headers = typeof item.headers === 'string' ? item.headers : ''
       if (!headers && typeof item.ua === 'string' && item.ua) headers = `User-Agent: ${item.ua}`
       if (hosts || headers) rules.push({ hosts, headers })
     }
   }
-  // 旧格式迁移（v0.1.0）：无 rules 时用 hosts + ua 构造单条 User-Agent 头规则。
+  // 顶层 hosts + ua 简写：构造单条 User-Agent 头规则。
   if (rules.length === 0 && typeof v.hosts === 'string' && v.hosts) {
     const ua = typeof v.ua === 'string' && v.ua ? v.ua : DEFAULT_UA
     rules.push({ hosts: v.hosts, headers: `User-Agent: ${ua}` })
@@ -210,11 +209,11 @@ function snapshotToForm(value: unknown): { enabled: boolean; rules: RuleForm[] }
 }
 
 /**
- * 设置面板卡片组件。通过 settingsScope 读取/写入命名空间 `agent-router-ua`。
+ * 设置面板卡片组件。通过 settingsScope 读取/写入命名空间 `dsh-header-injection`。
  * 本地编辑 + 保存按钮：保存时写入启用开关与规则数组，node half 实时生效。
  * 规则 hosts 或 headers 任一为空的条目保存时丢弃（与 node half normalize 一致）。
  */
-function UaInjectCard({ scope }: { scope: any }) {
+function HeaderInjectCard({ scope }: { scope: any }) {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<{ enabled: boolean; rules: RuleForm[] }>(() =>
     snapshotToForm(scope.getSnapshot()?.value),
@@ -409,11 +408,11 @@ export function apply(ctx: any): void {
             key: NS,
             priority: 30,
           },
-          () => React.createElement(UaInjectCard, { scope }),
+          () => React.createElement(HeaderInjectCard, { scope }),
         ),
       )
     })
   } catch (error) {
-    console.error('[agent-router-ua] client 设置卡片加载失败:', error)
+    console.error('[dsh-header-injection] client 设置卡片加载失败:', error)
   }
 }
