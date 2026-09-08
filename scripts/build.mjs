@@ -1,5 +1,5 @@
 /**
- * build.mjs — agent-router-ua 双半构建（esbuild）。
+ * build.mjs — dsh-header-injection 双半构建（esbuild）。
  *
  * 产物：
  *   lib/index.js    node half（ESM）：patch 全局 fetch + 注册设置命名空间。
@@ -54,7 +54,7 @@ await build({
   //   window.__ModuleLoader__.load({ id, factory: (require) => { ... return module.exports } })
   banner: {
     js: `window.__ModuleLoader__.load({
-  id: 'agent-router-ua',
+  id: 'dsh-header-injection',
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;

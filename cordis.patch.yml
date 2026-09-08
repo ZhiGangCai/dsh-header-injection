@@ -1,5 +1,5 @@
-# agent-router-ua bundle 层挂载声明。
+# dsh-header-injection bundle 层挂载声明。
 # insert 的 id 与 name 必须等于包名（合同铁律），否则启停与调试困难。
 - insert:
-    - id: agent-router-ua
-      name: agent-router-ua
+    - id: dsh-header-injection
+      name: dsh-header-injection

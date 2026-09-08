@@ -1,7 +1,7 @@
 {
-  "name": "agent-router-ua",
-  "version": "0.2.0",
-  "description": "请求头注入插件：按 host 规则注入 HTTP 请求头（多条规则各自独立头集合，同名头覆盖原值，默认 agentrouter.org → User-Agent: RooCode/0.15.0），绕过目标站点客户端 WAF 拦截；其余请求零影响",
+  "name": "dsh-header-injection",
+  "version": "0.1.0",
+  "description": "请求头注入插件：按 host 规则注入 HTTP 请求头（多条规则各自独立头集合，同名头覆盖原值），绕过目标站点客户端校验；其余请求零影响。默认规则预设 agentrouter.org → User-Agent: RooCode/0.15.0 典型用例",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
