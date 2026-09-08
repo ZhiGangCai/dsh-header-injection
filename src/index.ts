@@ -1,17 +1,18 @@
 /**
- * agent-router-ua — 请求头注入插件（node half）。
+ * dsh-header-injection — 请求头注入插件（node half）。
  *
- * 背景：AgentRouter（https://agentrouter.org）前端是阿里云 WAF，按
- * 「TLS 指纹 + SDK 请求头 + 请求结构」校验客户端身份；DSH 的 pi-ai
- * OpenAI 通路（Node fetch/openai SDK）默认 User-Agent 为
+ * 功能：按 host 规则改写出站 HTTP 请求头——多条规则、每条规则绑定一组
+ * host 后缀与一组请求头；注入采用 Headers.set 语义，同名头覆盖原请求头
+ * （大小写不敏感），规则未提及的头保持不变；未命中任何规则的请求原样
+ * 透传，零影响。
+ *
+ * 典型用例（默认预设）：AgentRouter（https://agentrouter.org）前端是
+ * 阿里云 WAF，按「TLS 指纹 + SDK 请求头 + 请求结构」校验客户端身份；
+ * DSH 的 pi-ai OpenAI 通路（Node fetch/openai SDK）默认 User-Agent 为
  * deepseek-harness/<version>，被 401 unauthorized client detected 拦截。
- * 实测（2026-08-27）：仅把 User-Agent 改写为 RooCode/0.15.0，
- * WAF 即放行进入 token 校验阶段（fake key 返回「无效的令牌」而非
- * unauthorized client detected）。
- *
- * 2026-08-31 改版：插件由「UA 注入」升级为通用「请求头注入」——
- * 多条 host 规则、每条规则注入一组请求头；注入采用 Headers.set 语义，
- * 同名头覆盖原请求头，规则未提及的头保持不变；可按站点定制任意伪装头。
+ * 实测（2026-08-27）：仅把 User-Agent 改写为 RooCode/0.15.0，WAF 即放行
+ * 进入 token 校验阶段（fake key 返回「无效的令牌」而非 unauthorized
+ * client detected）。默认规则即预设了该场景，装好即可直接使用。
  *
  * 实现原理（不改 DSH 源码）：
  *   pi-ai 的 openai-completions 通路每次请求都 new 一个 OpenAI client，
@@ -21,7 +22,7 @@
  *   覆盖，其余请求原样透传，后续所有新建 client 天然生效。
  *
  * 配置来源（设置面板优先）：
- *   通过 DSH 设置服务（ctx.settings）注册命名空间 `agent-router-ua`，
+ *   通过 DSH 设置服务（ctx.settings）注册命名空间 `dsh-header-injection`，
  *   配置在「设置 → 插件 → 请求头注入」面板编辑并即时生效；当
  *   settings 服务不可用时（降级），回退读取环境变量：
  *     AR_UA_RULES   JSON 数组 [{ "hosts": "a.org,b.org", "headers": "User-Agent: X\nX-Foo: bar" }, ...]（可选，多规则）
@@ -29,10 +30,6 @@
  *     AR_UA_HOSTS   逗号分隔的 host 后缀列表（默认 agentrouter.org）
  *     AR_UA_VALUE   UA 值（默认 RooCode/0.15.0，与 AR_UA_HOSTS 构成单条 User-Agent 规则）
  *     AR_UA_ENABLED 1/0（默认 1）
- *
- * 旧配置兼容：v0.1.0 {enabled, hosts, ua} 与 v0.2.0 中间格式
- * rules[{hosts, ua}] 在 normalizeCfg 中自动迁移为 User-Agent 头规则，
- * 已存自定义配置不丢失。
  */
 
 import z from "schemastery"
@@ -40,21 +37,21 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings"
 
 /**
  * 携带原始 fetch 引用的 patch 函数。
- * `__agentRouterUaOriginal` 兼作已 patch 标记：HMR 重载时若上一实例未及
- * 时 dispose（崩溃/热替换），新实例直接复用其原始引用，避免二次包装。
+ * `__dshHeaderInjectionOriginal` 兼作已 patch 标记：HMR 重载时若上一实例
+ * 未及时 dispose（崩溃/热替换），新实例直接复用其原始引用，避免二次包装。
  */
 interface PatchedFetch extends typeof fetch {
-  __agentRouterUaOriginal?: typeof fetch
+  __dshHeaderInjectionOriginal?: typeof fetch
 }
 
 /** 插件名：合同要求与包名一致。 */
-export const name = 'agent-router-ua'
+export const name = 'dsh-header-injection'
 
 /** 严格注入：本插件通过 ctx 访问的全部服务。 */
 export const inject = ['settings', 'webServer']
 
 /** 设置命名空间：设置面板与 node half 的 join key。 */
-const NS = 'agent-router-ua'
+const NS = 'dsh-header-injection'
 
 /** 常量默认值（设置 schema 默认 + 环境变量 fallback + 兜底规则）。 */
 const DEFAULT_HOSTS = 'agentrouter.org'
@@ -117,9 +114,9 @@ function parseHeaders(raw: unknown): HeaderPair[] {
 }
 
 /**
- * 规整任意来源（设置面板 / 旧格式持久化 / 环境变量）的配置为运行时形状。
- * 规则内优先级：headers 多行文本 → ua 字段（迁移为 User-Agent 头）。
- * 整体优先级：rules 数组 → 旧格式 hosts+ua（迁移为单条规则）→ 默认规则。
+ * 规整任意来源（设置面板 / 环境变量）的配置为运行时形状。
+ * 规则内优先级：headers 多行文本 → ua 简写（等价一条 User-Agent 头）。
+ * 整体优先级：rules 数组 → 顶层 hosts+ua 简写（单条规则）→ 默认规则。
  * hosts 为空或头集合为空的规则直接丢弃（与面板保存逻辑一致）。
  */
 function normalizeCfg(raw: any): RuntimeCfg {
@@ -129,7 +126,7 @@ function normalizeCfg(raw: any): RuntimeCfg {
     if (hosts.length === 0) return
     let headers = parseHeaders(headersRaw)
     if (headers.length === 0) {
-      // ua 字段兼容（v0.1.0 旧配置 / v0.2.0 中间格式均用 ua 表达 UA 注入）。
+      // ua 简写：等价于一条 User-Agent 头。
       const ua = typeof uaRaw === 'string' ? uaRaw.trim() : ''
       if (ua) headers = [{ name: 'User-Agent', value: ua }]
     }
@@ -157,7 +154,7 @@ function readCfgFromEnv(): RuntimeCfg {
     try {
       return normalizeCfg({ enabled, rules: JSON.parse(rulesJson) })
     } catch (error) {
-      console.error(`[agent-router-ua] AR_UA_RULES 解析失败，回退单条规则：${String(error instanceof Error ? error.message : error)}`)
+      console.error(`[dsh-header-injection] AR_UA_RULES 解析失败，回退单条规则：${String(error instanceof Error ? error.message : error)}`)
     }
   }
   // 单条规则降级：AR_UA_HEADERS 多行头文本优先；否则 AR_UA_HOSTS + AR_UA_VALUE 构成 User-Agent 规则。
@@ -206,7 +203,7 @@ function urlOf(input: RequestInfo | URL): URL | null {
  */
 export function apply(ctx: any): void {
   ctx.effect(() => {
-    const tag = `[agent-router-ua]`
+    const tag = `[dsh-header-injection]`
     // 可变配置：初始取环境变量，settings 可用时被覆盖/实时更新。
     const cfgRef: { value: RuntimeCfg } = { value: readCfgFromEnv() }
     let hits = 0
@@ -238,7 +235,7 @@ export function apply(ctx: any): void {
 
     // ── patch 全局 fetch（幂等）─────────────────────────────────────
     const current = globalThis.fetch as PatchedFetch | undefined
-    const original: typeof fetch = current?.__agentRouterUaOriginal ?? current
+    const original: typeof fetch = current?.__dshHeaderInjectionOriginal ?? current
     if (original === undefined) {
       log('全局 fetch 不可用，跳过 patch（环境不支持 fetch）')
       stopWatch?.()
@@ -265,7 +262,7 @@ export function apply(ctx: any): void {
       }
       return original(input, init)
     }) as PatchedFetch
-    patched.__agentRouterUaOriginal = original
+    patched.__dshHeaderInjectionOriginal = original
     globalThis.fetch = patched
     log(`已 patch 全局 fetch：${formatRules(cfgRef.value.rules)}（enabled=${cfgRef.value.enabled}）`)
 
@@ -279,7 +276,7 @@ export function apply(ctx: any): void {
     if (webServer != null) {
       disposeHealth = webServer.register({
         kind: 'exact',
-        path: '/agent-router-ua/health',
+        path: '/dsh-header-injection/health',
         handler: (_req: unknown, res: any) => {
           json(res, 200, {
             ok: true,
@@ -305,7 +302,7 @@ export function apply(ctx: any): void {
     const commands = ctx.get('commands')
     if (commands !== undefined && commands !== null) {
       disposeCommand = commands.register({
-        name: 'agentrouter-ua',
+        name: 'dsh-header-injection',
         description: '请求头注入：status（默认）',
         recordInput: false,
         handler: async () => {
@@ -313,7 +310,7 @@ export function apply(ctx: any): void {
           return {
             kind: 'success' as const,
             text: [
-              `agent-router-ua v${VERSION}（请求头注入）`,
+              `dsh-header-injection v${VERSION}（请求头注入）`,
               `已 patch：${globalThis.fetch === patched ? '是' : '否'}`,
               `注入规则（${cfg.rules.length} 条，同名头覆盖原值）：`,
               ...cfg.rules.map((r, i) =>
@@ -331,7 +328,7 @@ export function apply(ctx: any): void {
       disposeHealth?.()
       disposeCommand?.()
       if (globalThis.fetch === patched) {
-        globalThis.fetch = patched.__agentRouterUaOriginal ?? original
+        globalThis.fetch = patched.__dshHeaderInjectionOriginal ?? original
         log('已还原全局 fetch')
       }
     }
