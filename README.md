@@ -119,4 +119,4 @@ npm run gates        # 一致性门禁（包合同 + 产物关键标记）
 
 ## License
 
-MIT
+[MIT](./LICENSE)
